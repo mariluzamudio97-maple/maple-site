@@ -1162,7 +1162,7 @@ function buildOrderSummary(fields, extra){
   const totalLine = (hasUnknownPrice || zone.price === null) ? "por confirmar" : money(productSubtotal + zone.price);
 
   const base = [
-    "¡Hola! Quiero hacer un pedido en Maple 🍪",
+    "¡Hola! Quiero hacer un pedido en Maple \uD83C\uDF6A",
     "",
     ...lines,
     "",
@@ -1177,13 +1177,16 @@ function buildOrderSummary(fields, extra){
   ];
 
   if(extra && extra.paymentId){
-    base.push("💳 Pago con tarjeta confirmado ✅");
-    base.push(`Referencia de pago: ${extra.paymentId}`);
+    base.push("\uD83D\uDCB3 Pago con tarjeta confirmado \u2705");
+    const shortPaymentRef = extra.paymentId && extra.paymentId.length > 12
+      ? extra.paymentId.slice(-12)
+      : extra.paymentId;
+    base.push(`Referencia de pago: ${shortPaymentRef}`);
     base.push("Tu pedido ha quedado confirmado.");
   } else {
     base.push("Método de pago: Transferencia — quedo al pendiente de los datos bancarios.");
     base.push("");
-    base.push("⚠️ El pedido se confirma una vez recibido el comprobante de pago.");
+    base.push("\u26A0\uFE0F El pedido se confirma una vez recibido el comprobante de pago.");
   }
 
   return base.join("\n");
