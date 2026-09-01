@@ -1248,7 +1248,7 @@ function buildOrderSummary(fields, extra){
   const totalLine = (hasUnknownPrice || zone.price === null) ? "por confirmar" : money(productSubtotal + zone.price);
 
   const base = [
-    "¡Hola! Quiero hacer un pedido en Maple [MAPLE_COOKIE]",
+    "¡Hola! Quiero hacer un pedido en Maple MAPLECOOKIE",
     "",
     ...lines,
     "",
@@ -1263,7 +1263,7 @@ function buildOrderSummary(fields, extra){
   ];
 
   if(extra && extra.paymentId){
-    base.push("[CARD_EMOJI] Pago con tarjeta confirmado [CHECK_EMOJI]");
+    base.push("CARDEMOJI Pago con tarjeta confirmado CHECKEMOJI");
     base.push("Tu pedido ha quedado confirmado.");
   } else {
     base.push("Método de pago: Transferencia — quedo al pendiente de los datos bancarios.");
@@ -1275,10 +1275,13 @@ function buildOrderSummary(fields, extra){
 }
 
 function encodeWhatsappMessage(message){
+  // Primero codificamos TODO el texto a una URL ASCII.
+  // Después insertamos los bytes UTF-8 de los emojis ya codificados.
+  // Así el navegador/hosting nunca tiene que interpretar un emoji en el código fuente.
   return encodeURIComponent(message)
-    .replace(/%5BMAPLE_COOKIE%5D/g, "%F0%9F%8D%AA")
-    .replace(/%5BCARD_EMOJI%5D/g, "%F0%9F%92%B3")
-    .replace(/%5BCHECK_EMOJI%5D/g, "%E2%9C%85");
+    .replace(/MAPLECOOKIE/g, "%F0%9F%8D%AA")
+    .replace(/CARDEMOJI/g, "%F0%9F%92%B3")
+    .replace(/CHECKEMOJI/g, "%E2%9C%85");
 }
 
 function sendToWhatsapp(){
