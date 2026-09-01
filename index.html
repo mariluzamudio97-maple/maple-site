@@ -606,10 +606,15 @@ const CONFIG = {
   // Formato: "YYYY-MM-DD". Ejemplo: ["2026-09-16", "2026-12-25"]
   closedDates: [],
 
-  // Anticipación mínima en días para poder pedir
-  minAdvanceDays: 1,
+  // Pedidos programados: mínimo 24 horas de anticipación.
+  minAdvanceHours: 24,
 
-  // Horario de entrega (solo informativo, se muestra en el checkout)
+  // Pedidos del día: mínimo 1 hora entre el pedido y la entrega.
+  sameDayLeadHours: 1,
+
+  // Horario de entrega.
+  deliveryStart: "10:00",
+  deliveryEnd: "17:00",
   deliveryHoursLabel: "10:00 AM – 5:00 PM",
 
   // Aviso opcional arriba de toda la página. Déjalo en "" para ocultarlo.
@@ -946,10 +951,46 @@ function isValidDeliveryDate(dateStr){
   return true;
 }
 
+function localDateString(d = new Date()){
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function minSelectableDate(){
   const d = new Date();
-  d.setDate(d.getDate() + CONFIG.minAdvanceDays);
-  return d.toISOString().split("T")[0];
+  d.setHours(d.getHours() + CONFIG.minAdvanceHours);
+  return localDateString(d);
+}
+
+function combineLocalDateTime(dateStr, timeStr){
+  if(!dateStr || !timeStr) return null;
+  const [y,m,d] = dateStr.split("-").map(Number);
+  const [hh,mm] = timeStr.split(":").map(Number);
+  return new Date(y, m - 1, d, hh, mm, 0, 0);
+}
+
+function minutesFromTime(timeStr){
+  const [hh,mm] = timeStr.split(":").map(Number);
+  return hh * 60 + mm;
+}
+
+function timeFromMinutes(total){
+  const hh = String(Math.floor(total / 60)).padStart(2, "0");
+  const mm = String(total % 60).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function roundedSameDayMinTime(){
+  const now = new Date();
+  const lead = new Date(now.getTime() + CONFIG.sameDayLeadHours * 60 * 60 * 1000);
+  let minutes = lead.getHours() * 60 + lead.getMinutes();
+
+  // Redondeamos hacia arriba a bloques de 15 min para que el selector sea práctico.
+  minutes = Math.ceil(minutes / 15) * 15;
+  minutes = Math.max(minutes, minutesFromTime(CONFIG.deliveryStart));
+  return timeFromMinutes(minutes);
 }
 
 /* ---------- drawer ---------- */
@@ -1009,7 +1050,7 @@ function renderDrawer(){
   const hasUnknownPrice = cart.some(i => i.price === null);
   const productSubtotal = cart.reduce((sum,i)=> sum + (i.price !== null ? i.price * i.qty : 0), 0);
 
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = localDateString();
   const min = orderMode === "hoy" ? todayStr : minSelectableDate();
   const dateDefault = orderMode === "hoy" ? `value="${todayStr}"` : "";
 
@@ -1020,10 +1061,11 @@ function renderDrawer(){
   footer.innerHTML = `
     <div class="field-label">Fecha de entrega</div>
     <input type="date" id="delivery-date" min="${min}" ${dateDefault}>
-    <p class="hint" id="date-hint">${orderMode === "hoy" ? "Pedido para hoy — entregamos " + CONFIG.deliveryHoursLabel.toLowerCase() + "." : `Entregamos ${CONFIG.deliveryHoursLabel.toLowerCase()}, martes a sábado. Mínimo ${CONFIG.minAdvanceDays} día(s) de anticipación.`}</p>
+    <p class="hint" id="date-hint">${orderMode === "hoy" ? "Pedido para hoy — entregamos " + CONFIG.deliveryHoursLabel.toLowerCase() + " y requerimos mínimo 1 hora de anticipación." : `Entregamos ${CONFIG.deliveryHoursLabel.toLowerCase()}, martes a sábado. Los pedidos programados requieren mínimo 24 horas de anticipación.`}</p>
 
     <div class="field-label">Hora de entrega</div>
-    <input type="time" id="delivery-time" required>
+    <input type="time" id="delivery-time" min="${orderMode === "hoy" ? roundedSameDayMinTime() : CONFIG.deliveryStart}" max="${CONFIG.deliveryEnd}" step="900" required>
+    <p class="hint" id="time-hint">${orderMode === "hoy" ? `La primera hora disponible hoy es ${roundedSameDayMinTime()} (mínimo 1 hora después de hacer el pedido).` : `Horario disponible: ${CONFIG.deliveryHoursLabel}. La fecha y hora deben quedar al menos 24 horas después de este momento.`}</p>
 
     <div class="field-label">Zona de entrega</div>
     <select id="delivery-zone">
@@ -1069,7 +1111,7 @@ function renderDrawer(){
       dateInput.value = "";
     } else {
       dateHint.style.color = "";
-      dateHint.textContent = `Entregamos ${CONFIG.deliveryHoursLabel.toLowerCase()}, martes a sábado.`;
+      dateHint.textContent = orderMode === "hoy" ? `Pedido para hoy — mínimo 1 hora de anticipación y dentro de ${CONFIG.deliveryHoursLabel}.` : `Entregamos ${CONFIG.deliveryHoursLabel.toLowerCase()}, martes a sábado. Mínimo 24 horas de anticipación.`;
     }
   });
 
@@ -1135,18 +1177,62 @@ function validateCheckoutFields(){
     alert("Elige una fecha de entrega válida (martes a sábado).");
     return null;
   }
-  if(zoneIdx === ""){
-    alert("Selecciona tu zona de entrega.");
-    return null;
-  }
+
   if(!timeVal){
     alert("Selecciona la hora de entrega.");
     return null;
   }
+
+  const selectedMinutes = minutesFromTime(timeVal);
+  const openMinutes = minutesFromTime(CONFIG.deliveryStart);
+  const closeMinutes = minutesFromTime(CONFIG.deliveryEnd);
+
+  if(selectedMinutes < openMinutes || selectedMinutes > closeMinutes){
+    alert(`La hora de entrega debe ser entre ${CONFIG.deliveryHoursLabel}.`);
+    return null;
+  }
+
+  const now = new Date();
+  const deliveryDateTime = combineLocalDateTime(dateVal, timeVal);
+  const todayStr = localDateString(now);
+
+  if(orderMode === "hoy" || dateVal === todayStr){
+    if(dateVal !== todayStr){
+      alert("Si elegiste pedido para hoy, la fecha debe ser la de hoy.");
+      return null;
+    }
+
+    const earliestToday = new Date(now.getTime() + CONFIG.sameDayLeadHours * 60 * 60 * 1000);
+    const closingToday = combineLocalDateTime(todayStr, CONFIG.deliveryEnd);
+
+    if(earliestToday > closingToday){
+      alert("Ya no alcanzamos a programar entregas para hoy. Los pedidos del día requieren mínimo 1 hora de anticipación y entregamos hasta las 5:00 PM. Elige otra fecha con mínimo 24 horas de anticipación.");
+      return null;
+    }
+
+    if(deliveryDateTime < earliestToday){
+      alert("Para pedidos del día, la entrega debe programarse mínimo 1 hora después de realizar el pedido.");
+      return null;
+    }
+  } else {
+    const earliestScheduled = new Date(now.getTime() + CONFIG.minAdvanceHours * 60 * 60 * 1000);
+
+    if(deliveryDateTime < earliestScheduled){
+      alert("Los pedidos programados deben hacerse con mínimo 24 horas de anticipación. Elige una fecha u hora posterior.");
+      return null;
+    }
+  }
+
+  if(zoneIdx === ""){
+    alert("Selecciona tu zona de entrega.");
+    return null;
+  }
+
   if(!addressVal){
     alert("Agrega la dirección de entrega.");
     return null;
   }
+
   return { dateVal, timeVal, addressVal, zoneIdx };
 }
 
@@ -1162,7 +1248,7 @@ function buildOrderSummary(fields, extra){
   const totalLine = (hasUnknownPrice || zone.price === null) ? "por confirmar" : money(productSubtotal + zone.price);
 
   const base = [
-    "¡Hola! Quiero hacer un pedido en Maple \uD83C\uDF6A",
+    "¡Hola! Quiero hacer un pedido en Maple [MAPLE_COOKIE]",
     "",
     ...lines,
     "",
@@ -1177,11 +1263,7 @@ function buildOrderSummary(fields, extra){
   ];
 
   if(extra && extra.paymentId){
-    base.push("\uD83D\uDCB3 Pago con tarjeta confirmado \u2705");
-    const shortPaymentRef = extra.paymentId && extra.paymentId.length > 12
-      ? extra.paymentId.slice(-12)
-      : extra.paymentId;
-    base.push(`Referencia de pago: ${shortPaymentRef}`);
+    base.push("[CARD_EMOJI] Pago con tarjeta confirmado [CHECK_EMOJI]");
     base.push("Tu pedido ha quedado confirmado.");
   } else {
     base.push("Método de pago: Transferencia — quedo al pendiente de los datos bancarios.");
@@ -1192,11 +1274,18 @@ function buildOrderSummary(fields, extra){
   return base.join("\n");
 }
 
+function encodeWhatsappMessage(message){
+  return encodeURIComponent(message)
+    .replace(/%5BMAPLE_COOKIE%5D/g, "%F0%9F%8D%AA")
+    .replace(/%5BCARD_EMOJI%5D/g, "%F0%9F%92%B3")
+    .replace(/%5BCHECK_EMOJI%5D/g, "%E2%9C%85");
+}
+
 function sendToWhatsapp(){
   const fields = validateCheckoutFields();
   if(!fields) return;
   const message = buildOrderSummary(fields);
-  const url = `https://wa.me/${CONFIG.whatsappNumber}?text=${encodeURIComponent(message)}`;
+  const url = `https://wa.me/${CONFIG.whatsappNumber}?text=${encodeWhatsappMessage(message)}`;
   window.open(url, "_blank");
 }
 
@@ -1306,7 +1395,7 @@ async function checkStripeReturn(){
             Stripe confirmó tu pago. Tu referencia es <strong>${paymentId}</strong>.<br><br>
             Tu pedido ya está pagado; solo envíanos los detalles por WhatsApp.
           </p>
-          <a href="https://wa.me/${CONFIG.whatsappNumber}?text=${encodeURIComponent(message)}" target="_blank"
+          <a href="https://wa.me/${CONFIG.whatsappNumber}?text=${encodeWhatsappMessage(message)}" target="_blank"
              style="background:var(--vino); color:#fff; padding:16px 32px; border-radius:100px; text-decoration:none; font-size:13px; letter-spacing:1px; text-transform:uppercase; font-weight:600;">
             Enviar pedido a WhatsApp
           </a>
@@ -1350,10 +1439,24 @@ function setupWhenSelector(){
   const hint = document.getElementById("when-hint");
 
   btnHoy.onclick = () => {
+    const now = new Date();
+    const todayStr = localDateString(now);
+    const earliestToday = new Date(now.getTime() + CONFIG.sameDayLeadHours * 60 * 60 * 1000);
+    const closingToday = combineLocalDateTime(todayStr, CONFIG.deliveryEnd);
+
+    if(!isValidDeliveryDate(todayStr) || earliestToday > closingToday){
+      orderMode = "otro";
+      btnHoy.classList.remove("active");
+      btnOtro.classList.add("active");
+      hint.textContent = "Ya no hay horario disponible para entrega hoy. Elige otra fecha; los pedidos programados requieren mínimo 24 horas de anticipación.";
+      alert("Ya no podemos tomar pedidos para entrega hoy. Necesitamos mínimo 1 hora de preparación y entregamos hasta las 5:00 PM.");
+      return;
+    }
+
     orderMode = "hoy";
     btnHoy.classList.add("active");
     btnOtro.classList.remove("active");
-    hint.textContent = "Te mostramos lo que tenemos listo para entregar hoy mismo.";
+    hint.textContent = "Te mostramos lo que tenemos listo para entregar hoy mismo. La entrega debe programarse mínimo 1 hora después de hacer el pedido.";
     const section = document.getElementById("especiales-del-dia");
     if(section) section.scrollIntoView({ behavior: "smooth", block: "start" });
   };
