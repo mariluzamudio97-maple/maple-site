@@ -20,7 +20,6 @@ export default async function handler(req, res) {
         method: "GET",
         headers: {
           apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`,
           Accept: "application/json",
         },
       }
@@ -48,12 +47,15 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ordersPaused: Boolean(config.orders_paused),
+
       pauseMessage:
         config.pause_message ||
         "Pedidos temporalmente cerrados. Gracias por tu comprensión.",
+
       closedDates: Array.isArray(config.closed_dates)
         ? config.closed_dates
         : [],
+
       blockedRanges:
         config.blocked_ranges &&
         typeof config.blocked_ranges === "object"
