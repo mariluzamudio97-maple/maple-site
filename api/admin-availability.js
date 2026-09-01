@@ -24,7 +24,6 @@ function getConfig() {
 function supabaseHeaders(key) {
   return {
     apikey: key,
-    Authorization: `Bearer ${key}`,
     "Content-Type": "application/json",
     Accept: "application/json",
   };
@@ -118,10 +117,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "GET") {
-      const config = await readAvailability(
-        supabaseUrl,
-        supabaseKey
-      );
+      const config = await readAvailability(supabaseUrl, supabaseKey);
 
       if (!config) {
         return res.status(404).json({
@@ -133,10 +129,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === "POST") {
-      const current = await readAvailability(
-        supabaseUrl,
-        supabaseKey
-      );
+      const current = await readAvailability(supabaseUrl, supabaseKey);
 
       if (!current) {
         return res.status(404).json({
