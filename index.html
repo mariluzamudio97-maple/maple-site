@@ -645,6 +645,43 @@ const CONFIG = {
   stripeEnabled: true
 };
 
+// Disponibilidad en vivo administrada desde /admin.html.
+// Si por cualquier razón no carga el servidor, el sitio conserva las reglas locales.
+let LIVE_AVAILABILITY = {
+  ordersPaused: false,
+  pauseMessage: "Pedidos temporalmente cerrados. Gracias por tu comprensión.",
+  closedDates: [],
+  blockedRanges: {}
+};
+
+async function loadLiveAvailability(){
+  try{
+    const res = await fetch("/api/availability", { cache: "no-store" });
+    if(!res.ok) throw new Error("No se pudo cargar disponibilidad");
+    const data = await res.json();
+    LIVE_AVAILABILITY = {
+      ordersPaused: !!data.ordersPaused,
+      pauseMessage: data.pauseMessage || "Pedidos temporalmente cerrados. Gracias por tu comprensión.",
+      closedDates: Array.isArray(data.closedDates) ? data.closedDates : [],
+      blockedRanges: data.blockedRanges && typeof data.blockedRanges === "object" ? data.blockedRanges : {}
+    };
+
+    if(LIVE_AVAILABILITY.ordersPaused){
+      const banner = document.getElementById("notice-banner");
+      if(banner){
+        banner.textContent = LIVE_AVAILABILITY.pauseMessage;
+        banner.style.display = "block";
+      }
+    }
+
+    if(drawer && drawer.classList.contains("open")){
+      renderDrawer();
+    }
+  }catch(err){
+    console.warn("Maple disponibilidad:", err);
+  }
+}
+
 // Precios en null = "por confirmar". En cuanto tengan costeo, solo
 // reemplacen el null (o el número) por el precio real, ej: 180
 const PRODUCTS = {
@@ -948,7 +985,73 @@ function isValidDeliveryDate(dateStr){
   const day = d.getDay();
   if(!CONFIG.businessDays.includes(day)) return false;
   if(CONFIG.closedDates.includes(dateStr)) return false;
+  if(LIVE_AVAILABILITY.closedDates.includes(dateStr)) return false;
   return true;
+}
+
+function isTimeBlocked(dateStr, timeStr){
+  const ranges = LIVE_AVAILABILITY.blockedRanges[dateStr] || [];
+  const mins = minutesFromTime(timeStr);
+  return ranges.some(r => {
+    const start = minutesFromTime(r.start);
+    const end = minutesFromTime(r.end);
+    return mins >= start && mins < end;
+  });
+}
+
+function availableTimesForDate(dateStr){
+  if(!dateStr || !isValidDeliveryDate(dateStr) || LIVE_AVAILABILITY.ordersPaused) return [];
+
+  const result = [];
+  const now = new Date();
+  const todayStr = localDateString(now);
+  const first = minutesFromTime(CONFIG.deliveryStart);
+  const last = minutesFromTime(CONFIG.deliveryEnd);
+
+  for(let mins = first; mins <= last; mins += 15){
+    const time = timeFromMinutes(mins);
+    const candidate = combineLocalDateTime(dateStr, time);
+
+    if(dateStr === todayStr){
+      const earliest = new Date(now.getTime() + CONFIG.sameDayLeadHours * 60 * 60 * 1000);
+      if(candidate < earliest) continue;
+    } else {
+      const earliest = new Date(now.getTime() + CONFIG.minAdvanceHours * 60 * 60 * 1000);
+      if(candidate < earliest) continue;
+    }
+
+    if(isTimeBlocked(dateStr, time)) continue;
+    result.push(time);
+  }
+  return result;
+}
+
+function refreshTimeOptions(){
+  const dateInput = document.getElementById("delivery-date");
+  const timeInput = document.getElementById("delivery-time");
+  const timeHint = document.getElementById("time-hint");
+  if(!dateInput || !timeInput) return;
+
+  const previous = timeInput.value;
+  const times = availableTimesForDate(dateInput.value);
+
+  timeInput.innerHTML = `<option value="">Selecciona una hora...</option>` +
+    times.map(t => `<option value="${t}">${t}</option>`).join("");
+
+  if(previous && times.includes(previous)) timeInput.value = previous;
+
+  if(!dateInput.value){
+    timeHint.textContent = "Primero selecciona una fecha.";
+  } else if(!isValidDeliveryDate(dateInput.value)){
+    timeHint.textContent = "Ese día no tenemos entregas disponibles.";
+  } else if(times.length === 0){
+    timeHint.textContent = "Ya no hay horarios disponibles para esta fecha.";
+  } else {
+    const blocked = LIVE_AVAILABILITY.blockedRanges[dateInput.value] || [];
+    timeHint.textContent = blocked.length
+      ? `Horarios disponibles de ${CONFIG.deliveryHoursLabel}. Algunos horarios están bloqueados por saturación.`
+      : `Horarios disponibles de ${CONFIG.deliveryHoursLabel}.`;
+  }
 }
 
 function localDateString(d = new Date()){
@@ -1064,8 +1167,10 @@ function renderDrawer(){
     <p class="hint" id="date-hint">${orderMode === "hoy" ? "Pedido para hoy — entregamos " + CONFIG.deliveryHoursLabel.toLowerCase() + " y requerimos mínimo 1 hora de anticipación." : `Entregamos ${CONFIG.deliveryHoursLabel.toLowerCase()}, martes a sábado. Los pedidos programados requieren mínimo 24 horas de anticipación.`}</p>
 
     <div class="field-label">Hora de entrega</div>
-    <input type="time" id="delivery-time" min="${orderMode === "hoy" ? roundedSameDayMinTime() : CONFIG.deliveryStart}" max="${CONFIG.deliveryEnd}" step="900" required>
-    <p class="hint" id="time-hint">${orderMode === "hoy" ? `La primera hora disponible hoy es ${roundedSameDayMinTime()} (mínimo 1 hora después de hacer el pedido).` : `Horario disponible: ${CONFIG.deliveryHoursLabel}. La fecha y hora deben quedar al menos 24 horas después de este momento.`}</p>
+    <select id="delivery-time" required>
+      <option value="">Selecciona primero una fecha...</option>
+    </select>
+    <p class="hint" id="time-hint">Primero selecciona una fecha.</p>
 
     <div class="field-label">Zona de entrega</div>
     <select id="delivery-zone">
@@ -1106,14 +1211,16 @@ function renderDrawer(){
   const dateHint = document.getElementById("date-hint");
   dateInput.addEventListener("change", () => {
     if(dateInput.value && !isValidDeliveryDate(dateInput.value)){
-      dateHint.textContent = "Ese día no entregamos — elige martes a sábado.";
+      dateHint.textContent = "Ese día no entregamos o está cerrado — elige otra fecha.";
       dateHint.style.color = "var(--vino)";
       dateInput.value = "";
     } else {
       dateHint.style.color = "";
       dateHint.textContent = orderMode === "hoy" ? `Pedido para hoy — mínimo 1 hora de anticipación y dentro de ${CONFIG.deliveryHoursLabel}.` : `Entregamos ${CONFIG.deliveryHoursLabel.toLowerCase()}, martes a sábado. Mínimo 24 horas de anticipación.`;
     }
+    refreshTimeOptions();
   });
+  refreshTimeOptions();
 
   let selectedMethod = "tarjeta";
   const payButtons = document.querySelectorAll(".pay-method-btn");
@@ -1173,6 +1280,11 @@ function validateCheckoutFields(){
   const addressVal = document.getElementById("delivery-address").value.trim();
   const zoneIdx = document.getElementById("delivery-zone").value;
 
+  if(LIVE_AVAILABILITY.ordersPaused){
+    alert(LIVE_AVAILABILITY.pauseMessage || "Pedidos temporalmente cerrados.");
+    return null;
+  }
+
   if(!dateVal || !isValidDeliveryDate(dateVal)){
     alert("Elige una fecha de entrega válida (martes a sábado).");
     return null;
@@ -1180,6 +1292,12 @@ function validateCheckoutFields(){
 
   if(!timeVal){
     alert("Selecciona la hora de entrega.");
+    return null;
+  }
+
+  if(isTimeBlocked(dateVal, timeVal)){
+    alert("Ese horario ya está saturado. Elige otra hora disponible.");
+    refreshTimeOptions();
     return null;
   }
 
@@ -1442,6 +1560,10 @@ function setupWhenSelector(){
   const hint = document.getElementById("when-hint");
 
   btnHoy.onclick = () => {
+    if(LIVE_AVAILABILITY.ordersPaused){
+      alert(LIVE_AVAILABILITY.pauseMessage || "Pedidos temporalmente cerrados.");
+      return;
+    }
     const now = new Date();
     const todayStr = localDateString(now);
     const earliestToday = new Date(now.getTime() + CONFIG.sameDayLeadHours * 60 * 60 * 1000);
@@ -1478,6 +1600,7 @@ renderMenu();
 renderAnnouncement();
 renderCartBadge();
 setupWhenSelector();
+loadLiveAvailability();
 checkStripeReturn();
 </script>
 </body>
